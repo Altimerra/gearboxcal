@@ -236,17 +236,52 @@ $$\   $$ |$$ |  $$ |$$  __$$ |$$ |        $$ |$$\  \____$$\
 =#
 module Shafts
 using Roots
-export Shaft
+export Shaft,Force,vecsolve,shearx
 export calculate
+
+struct Force
+    x::Real# X component
+    y::Real # Y component
+    l::Real # distance from axis origin
+end
 
 mutable struct Shaft
     torque::Real # torque
     k::Real # di/do diameter ratio
     tau::Real # shaft stress
     dia::Union{Real,Nothing} # outer diameter
+    bear::Tuple # distance of bearings from origin
+    forces::Vector{Force} # A list of known forces acting on the shaft
 end
 
+
 T(tau,d_o,k) = pi/16*tau*d_o^3*(1-k^4)
+
+function vecsolve(s::Shaft)
+    b1 = sum([v.x for v in s.forces])
+    b2 = sum([v.y for v in s.forces])
+    b3 = sum([v.x*v.l for v in s.forces])
+    b4 = sum([v.y*v.l for v in s.forces])
+    b = [b1;b2;b3;b4]
+    r1l = s.bear[1]
+    r2l = s.bear[2]
+    A = [1 0 1 0;0 1 0 1; r1l 0 r2l 0;0 r1l 0 r2l]
+    x = A\(-b)
+    r1 = Force(x[1],x[2],r1l)
+    r2 = Force(x[3],x[4],r2l)
+    return r1,r2
+end
+
+function interval(t, a, b)
+    heaviside(t) =  0.5 * (sign(t) + 1)
+    return heaviside(t-a) - heaviside(t-b)
+end
+
+function shearx(forces::Vector{Force})
+    sort!(forces,by = x -> x.l)
+    vx(d,L) = sum([force.x*interval(d,force.l,L) for force in forces])
+    return vx
+end
 
 function calculate(s::Shaft)
     s.dia = fzero(x->T(s.tau,x,s.k)-s.torque,0)
