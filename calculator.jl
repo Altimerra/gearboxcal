@@ -236,7 +236,9 @@ $$\   $$ |$$ |  $$ |$$  __$$ |$$ |        $$ |$$\  \____$$\
 =#
 module Shafts
 using Roots
-export Shaft,Force,vecsolve,shearx
+using QuadGK
+using Plots
+export Shaft,Force,vecsolve,shear,moment
 export calculate
 
 struct Force
@@ -246,16 +248,21 @@ struct Force
 end
 
 mutable struct Shaft
-    torque::Real # torque
+    Power::Real # Transmitted power
+    N::Real # RPM
     k::Real # di/do diameter ratio
-    tau::Real # shaft stress
-    dia::Union{Real,Nothing} # outer diameter
+    L::Real # Length
+    tau::Real # shaft shear stress
+    sig::Real # shaft direct stress
+    dia::Union{Tuple,Nothing} # outer diameter
     bear::Tuple # distance of bearings from origin
     forces::Vector{Force} # A list of known forces acting on the shaft
 end
 
 
-T(tau,d_o,k) = pi/16*tau*d_o^3*(1-k^4)
+Tmax(tau::Real,d_o::Real,k::Real) = pi/16*tau*d_o^3*(1-k^4) # Max torque for a shaft
+T(P::Real,N::Real) = P*60/(2*pi*N) # Torque on a shaft
+Mmax(sig::Real,d_o::Real,k::Real) = pi/32*sig*d_o^3*(1-k^4) # Max bending moment for a shaft
 
 function vecsolve(s::Shaft)
     b1 = sum([v.x for v in s.forces])
@@ -272,21 +279,111 @@ function vecsolve(s::Shaft)
     return r1,r2
 end
 
-function interval(t, a, b)
+function interval(t::Real, a::Real, b::Real)
     heaviside(t) =  0.5 * (sign(t) + 1)
     return heaviside(t-a) - heaviside(t-b)
 end
 
-function shearx(forces::Vector{Force})
+function shear(forces::Vector{Force})
     sort!(forces,by = x -> x.l)
-    vx(d,L) = sum([force.x*interval(d,force.l,L) for force in forces])
-    return vx
+    vx(d::Real,L::Real) = sum([force.x*interval(d,force.l,L) for force in forces])
+    vy(d::Real,L::Real) = sum([force.y*interval(d,force.l,L) for force in forces])
+    return vx,vy
 end
 
+function moment(v::Function,l::Real)
+    m(x::Real) = quadgk(z->v(z,l),0,x,rtol=1e-3,atol=1e-3)[1]
+    return m
+end
+
+Te(m::Real,t::Real,km=2.5,kt=2.25) = sqrt((km*m)^2 + (kt*t)^2) # Guest's theory, related to Tmax
+Me(m::Real,t::Real,km=2.5,kt=2.25) = 1/2*(km*m + sqrt((km*m)^2 + (kt*t)^2)) # Rankine's theory, related to Mmax
+
 function calculate(s::Shaft)
-    s.dia = fzero(x->T(s.tau,x,s.k)-s.torque,0)
+    t = T(s.Power,s.N)
+
+    r1,r2 = vecsolve(s)
+    append!(s.forces,[r1,r2])
+    vx,vy = shear(s.forces)
+    mx = moment(vx,s.L)
+    my = moment(vy,s.L)
+    x = collect(0:(s.L/1000):s.L)
+    plvx = plot(x,vx.(x,s.L))
+    plvy = plot(x,vy.(x,s.L))
+    plmx = plot(x,mx.(x))
+    plmy = plot(x,my.(x))
+    savefig(plvx,"shear-x.png")
+    savefig(plvy,"shear-y.png")
+    savefig(plmx,"moment-x.png")
+    savefig(plmy,"moment-y.png")
+    
+    m = findmax( ( findmax(abs.(mx.(x)))[1] , findmax(abs.(my.(x)))[1] ) )[1]
+    te = Te(m,t)
+    me = Me(m,t)
+
+    t_dia = fzero(x->Tmax(s.tau,x,s.k)-te,0)
+    m_dia = fzero(x->Mmax(s.sig,x,s.k)-me,0)
+    s.dia = (t_dia,m_dia)
 end
 end
+
+module Bearings
+
+struct Bearing
+    "Radial load"
+    wr::Real
+    "Axial load"
+    wa::Real
+    "RPM"
+    N::Int
+    "Life in hours"
+    lh::Int
+    "Internal diameter"
+    d::Union{Real,Nothing}
+    "Static load rating"
+    c0::Union{Real,Nothing}
+    "Dynamic load rating"
+    c::Union{Real,Nothing}
+end
+
+"Equivalent radial load"
+WeR(wr::Real,wa::Real,x0=0.6,y0=0.5) = x0*wr+y0*wa
+
+"Static load rating for radial ball bearing"
+C0(n::Real,Z::Real,D::Real,alpha::Real=0,f_0::Real=12.3,) = f_0*n*Z*D^2*cos(alpha)
+
+#=
+"Basic dynamic load for balls smaller than 25.4mm"
+C(f_c::Real,n::Real,Z::Real,D::Real,alpha::Real=0) = f_c*(n*cos(alpha))^0.7 * Z*(1/3) * D^1.8 
+=#
+
+"Dynamic equivalent radial load"
+W(wr::Real,wa::Real,v=1,ks=2,x=1,y=0) = (x*v*wr + y*wa)*ks #ks for medium shock loads
+
+"Dynamic load rating"
+C(W::Real,L::Real,k::Real=3) = W*(L/1e6)^(1/k)
+
+"Bearing life multiplier for life other than L10"
+a(R::Real) = 6.85*(log(1/R))^(1/1.17)
+
+"Life in revs from life in working hours"
+L(lh::Int,N::Real) = 60*N*lh
+
+"Calculates the parameters of the bearing"
+function calculate(b::Bearing)
+    l10 = L(b.lh,b.N)
+    w = W(b.wr,b.wa)
+    b.c = C(w,l10)
+end
+
+end
+
+
+
+
+
+
+
 
 #=
 macro solfngen(method,sol_for,sol_with)
