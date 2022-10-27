@@ -18,11 +18,11 @@ module Rolling
 export Roller, Material, torque, power
 
 struct Roller
-    R # Roller radius
-    h0 # initial sample thickness
-    d # draft
-    w # sample width
-    N # RPM
+    R::Real # Roller radius
+    h0::Real # initial sample thickness
+    d::Real # draft
+    w::Real # sample width
+    N::Real # RPM
 end
 
 struct Material
@@ -65,7 +65,7 @@ using Classes
 using Interpolations
 export Gear14c,Gear14f,Gear20f,Gear20s
 export calculate
-export centre_distance,gear_ratio
+export centre_distance,gear_ratio,wt
 
 @class mutable Gear begin # 20 deg full depth
     P::Real # power transmitted
@@ -73,14 +73,16 @@ export centre_distance,gear_ratio
     rpm::Real # Revolutions per minute
     G::Real # gear ratio
     cs::Real # service factor
-    T::Real # teeth
-    mod::Real # module of gear
+    T::Union{Real,Nothing} # teeth
+    mod::Union{Real,Nothing} # module of gear
     pinion::Bool # whether gear is a pinion or not
     sig::Union{Real,Tuple,Vector} # Material strength (stress)
     sige::Union{Real,Tuple,Vector} # Flexural endurance limit (N/mm@)
     siges::Union{Real,Tuple,Vector} # Surface endurance limit (N/mm2)
     E::Real # Young's modulus (N/mm2)
     met::String # method of manufacture: "mach"(machined) or "cast"
+    b::Union{Tuple,Nothing} # Face width range
+    lam::Real # Min face width factor
 end
 
 @class mutable Gear14c <: Gear begin
@@ -143,7 +145,7 @@ end
 return (range[2]-range[1])*x+range[1]
 end
 
-lbd(g::AbstractGear) = lambda(g,1)
+lbd(g::AbstractGear) = lambda(g,g.lam)
 
 # Maximum tooth load (N)
 wtM(g::AbstractGear) = cv(g)*g.sig*lbd(g)*(g.mod)^2*pi*y(g)
@@ -200,6 +202,7 @@ function calculate(g::AbstractGear)
     g.sige = g.sige[vecfind(static_safety(g))]
     g.siges = vecgen(g.siges)
     g.siges = g.siges[vecfind(wear_safety(g))]
+    g.b = (lbd(g),lambda(g,1))
 end
 
 function calculate(g1::AbstractGear,g2::AbstractGear)
@@ -215,12 +218,14 @@ function calculate(g1::AbstractGear,g2::AbstractGear)
     g.dia = p.dia*p.G
     g.T = p.T*p.G
     g.mod = p.mod
+    g.rpm = p.rpm / p.G
     g.sig = vecgen(g.sig)
     g.sig = g.sig[vecfind(beam_safety(g))]
     g.sige = vecgen(g.sige)
     g.sige = g.sige[vecfind(static_safety(g))]
     g.siges = vecgen(g.siges)
     g.siges = g.siges[vecfind(wear_safety(g))]
+    g.b = (lbd(g),lambda(g,1))
 end
 end
 
