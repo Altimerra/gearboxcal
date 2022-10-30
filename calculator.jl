@@ -22,7 +22,7 @@ struct Roller
     h0::Real # initial sample thickness
     d::Real # draft
     w::Real # sample width
-    N::Real # RPM
+    N::Real # N
 end
 
 struct Material
@@ -50,6 +50,7 @@ function power(r::Roller,m::Material)
 end
 
 end
+
 #=
  $$$$$$\
 $$  __$$\
@@ -64,13 +65,13 @@ module Gears
 using Classes
 using Interpolations
 export Gear14c,Gear14f,Gear20f,Gear20s
-export calculate
+export calculate, calculate2
 export centre_distance,gear_ratio,wt
 
 @class mutable Gear begin # 20 deg full depth
     P::Real # power transmitted
     dia::Union{Real,Tuple} # diameter
-    rpm::Real # Revolutions per minute
+    N::Real # Revolutions per minute
     G::Real # gear ratio
     cs::Real # service factor
     T::Union{Real,Nothing} # teeth
@@ -96,7 +97,7 @@ end
 
 
 # pitch line velocity
-plv(g::AbstractGear) = (pi*g.dia*g.rpm)/60
+plv(g::AbstractGear) = (pi*g.dia*g.N)/60
 
 # tangential tooth load
 wt(g::AbstractGear) = g.P / plv(g) * g.cs
@@ -120,7 +121,9 @@ M(g::AbstractGear) = g.dia*1000/g.T
 # Diameter
 diameter(g::AbstractGear) = g.mod*g.T/1000
 
-std_mod_vals = [0.1,0.2,0.3,0.4,0.5,0.6,0.8,1,1.25,1.5,2,2.5,3,4,5,6,8,10,12,16,20,25,32,40,50] # ISO series 1
+"ISO series 1"
+std_mod_vals = [0.1,0.2,0.3,0.4,0.5,0.6,0.8,1,1.25,1.5,2,2.5,3,
+    4,5,6,8,10,12,16,20,25,32,40,50] 
 std_mod(g::AbstractGear) = filter(x->x>g.mod,std_mod_vals)[1]
 
 # Lewis form factor
@@ -154,7 +157,8 @@ beam_safety(g::AbstractGear) = wtM(g) .> wt(g)
 
 # Tooth error in action (mm)
 err_modules = vcat(collect(4:1:10),collect(12:2:20))
-err_errors = [0.051,0.055,0.065,0.071,0.078,0.085,0.089,0.097,0.104,0.110,0.114,0.117]
+err_errors = [0.051,0.055,0.065,0.071,0.078,0.085,0.089,0.097,
+    0.104,0.110,0.114,0.117]
 err_interpol = linear_interpolation(err_modules,err_errors)
 er(g::AbstractGear) = (g.mod < 4) ? 0.051 : err_interpol(g.mod)
 
@@ -165,7 +169,8 @@ C(g::Gear20f) = 0.111*er(g)*g.E / 2
 C(g::Gear20s) = 0.115*er(g)*g.E / 2
 
 # Dynamic tooth load (N)
-wd(g::AbstractGear) = wt(g) + (21*plv(g)*( lbd(g)*g.mod*C(g) + wt(g) ))/(21*plv(g)+sqrt(lbd(g)*g.mod*C(g) + wt(g)))
+wd(g::AbstractGear) = wt(g) + (21*plv(g)*( lbd(g)*g.mod*C(g) + wt(g) ))/
+    (21*plv(g)+sqrt(lbd(g)*g.mod*C(g) + wt(g)))
 
 # static tooth load (face width taken as average)
 ws(g::AbstractGear) = g.sige*lbd(g)*(g.mod)^2*pi*y(g)
@@ -186,10 +191,14 @@ ww(g::AbstractGear) = g.dia*1000 * lbd(g)*g.mod*Q(g)*K(g)
 
 wear_safety(g::AbstractGear) = ww(g) .> wd(g)
 
-centre_distance(g::AbstractGear) = (g.pinion) ? g.dia*(1+g.G)/2  : g.dia*(1+g.G)/(2*g.G)# where g is the pinion
-gear_ratio(g1::AbstractGear,g2::AbstractGear) = (g1.G/g2.G >= 1) ? g1.G/g2.G : g2.G/g1.G
+"where g is the pinion"
+centre_distance(g::AbstractGear) = (g.pinion) ? g.dia*(1+g.G)/2  :
+     g.dia*(1+g.G)/(2*g.G)# 
+gear_ratio(g1::AbstractGear,g2::AbstractGear) = (g1.G/g2.G >= 1) ? 
+    g1.G/g2.G : g2.G/g1.G
 vecgen(ran::Tuple) =  collect(ran[1]:((ran[2]-ran[1])/1000):ran[2])
-vecfind(vec::BitVector) = (findfirst(x->x==1,vec)==nothing) ? println("No suitable values in range") : findfirst(x->x==1,vec)
+vecfind(vec::BitVector) = (findfirst(x->x==1,vec)==nothing) ?
+    println("No suitable values in range") : findfirst(x->x==1,vec)
 
 function calculate(g::AbstractGear)
     g.T = min_teeth(g)
@@ -205,6 +214,23 @@ function calculate(g::AbstractGear)
     g.b = (lbd(g),lambda(g,1))
 end
 
+"Only Calculates gear ratio and stress values"
+function calculate2(g::AbstractGear)
+    g.mod = std_mod(g)
+    g.T = ceil(g.dia*1000/g.mod)
+    g.dia = diameter(g)
+    g.sig = vecgen(g.sig)
+    g.sig = g.sig[vecfind(beam_safety(g))]
+    g.sige = vecgen(g.sige)
+    g.sige = g.sige[vecfind(static_safety(g))]
+    g.siges = vecgen(g.siges)
+    g.siges = g.siges[vecfind(wear_safety(g))]
+    g.b = (lbd(g),lambda(g,1))
+end
+
+
+
+
 function calculate(g1::AbstractGear,g2::AbstractGear)
     if g1.pinion
         p = g1
@@ -215,10 +241,13 @@ function calculate(g1::AbstractGear,g2::AbstractGear)
     else
         return
     end
-    g.dia = p.dia*p.G
-    g.T = p.T*p.G
     g.mod = p.mod
-    g.rpm = p.rpm / p.G
+    g.T = round(p.T*p.G)
+    G = g.T/p.T 
+    g.G = G 
+    p.G = G
+    g.dia = g.mod*g.T*1e-3
+    g.N = p.N / p.G
     g.sig = vecgen(g.sig)
     g.sig = g.sig[vecfind(beam_safety(g))]
     g.sige = vecgen(g.sige)
@@ -244,7 +273,7 @@ using Roots
 using QuadGK
 using Plots
 export Shaft,Force,vecsolve,shear,moment
-export calculate
+export calculate,resultant
 
 struct Force
     x::Real# X component
@@ -252,22 +281,26 @@ struct Force
     l::Real # distance from axis origin
 end
 
+resultant(f::Force) = sqrt(f.x^2+f.y^2)
+
 mutable struct Shaft
     Power::Real # Transmitted power
-    N::Real # RPM
+    N::Real # N
     k::Real # di/do diameter ratio
     L::Real # Length
     tau::Real # shaft shear stress
     sig::Real # shaft direct stress
-    dia::Union{Tuple,Nothing} # outer diameter
+    dia::Union{Tuple,Nothing,Real} # outer diameter
     bear::Tuple # distance of bearings from origin
     forces::Vector{Force} # A list of known forces acting on the shaft
 end
 
-
-Tmax(tau::Real,d_o::Real,k::Real) = pi/16*tau*d_o^3*(1-k^4) # Max torque for a shaft
-T(P::Real,N::Real) = P*60/(2*pi*N) # Torque on a shaft
-Mmax(sig::Real,d_o::Real,k::Real) = pi/32*sig*d_o^3*(1-k^4) # Max bending moment for a shaft
+"Max torque for a shaft"
+Tmax(tau::Real,d_o::Real,k::Real) = pi/16*tau*d_o^3*(1-k^4) 
+"Torque on a shaft"
+T(P::Real,N::Real) = P*60/(2*pi*N)
+"Max bending moment for a shaft"
+Mmax(sig::Real,d_o::Real,k::Real) = pi/32*sig*d_o^3*(1-k^4)
 
 function vecsolve(s::Shaft)
     b1 = sum([v.x for v in s.forces])
@@ -301,8 +334,10 @@ function moment(v::Function,l::Real)
     return m
 end
 
-Te(m::Real,t::Real,km=2.5,kt=2.25) = sqrt((km*m)^2 + (kt*t)^2) # Guest's theory, related to Tmax
-Me(m::Real,t::Real,km=2.5,kt=2.25) = 1/2*(km*m + sqrt((km*m)^2 + (kt*t)^2)) # Rankine's theory, related to Mmax
+"Guest's theory, related to Tmax"
+Te(m::Real,t::Real,km=2.5,kt=2.25) = sqrt((km*m)^2 + (kt*t)^2)
+"Rankine's theory, related to Mmax"
+Me(m::Real,t::Real,km=2.5,kt=2.25) = 1/2*(km*m + sqrt((km*m)^2 + (kt*t)^2)) 
 
 function calculate(s::Shaft)
     t = T(s.Power,s.N)
@@ -317,10 +352,10 @@ function calculate(s::Shaft)
     plvy = plot(x,vy.(x,s.L))
     plmx = plot(x,mx.(x))
     plmy = plot(x,my.(x))
-    savefig(plvx,"shear-x.png")
-    savefig(plvy,"shear-y.png")
-    savefig(plmx,"moment-x.png")
-    savefig(plmy,"moment-y.png")
+    savefig(plvx,"figures/shear-x.png")
+    savefig(plvy,"figures/shear-y.png")
+    savefig(plmx,"figures/moment-x.png")
+    savefig(plmy,"figures/moment-y.png")
     
     m = findmax( ( findmax(abs.(mx.(x)))[1] , findmax(abs.(my.(x)))[1] ) )[1]
     te = Te(m,t)
@@ -331,18 +366,31 @@ function calculate(s::Shaft)
     s.dia = (t_dia,m_dia)
 end
 end
+#=
+$$$$$$$\                                $$\                               
+$$  __$$\                               \__|                              
+$$ |  $$ | $$$$$$\   $$$$$$\   $$$$$$\  $$\ $$$$$$$\   $$$$$$\   $$$$$$$\ 
+$$$$$$$\ |$$  __$$\  \____$$\ $$  __$$\ $$ |$$  __$$\ $$  __$$\ $$  _____|
+$$  __$$\ $$$$$$$$ | $$$$$$$ |$$ |  \__|$$ |$$ |  $$ |$$ /  $$ |\$$$$$$\  
+$$ |  $$ |$$   ____|$$  __$$ |$$ |      $$ |$$ |  $$ |$$ |  $$ | \____$$\ 
+$$$$$$$  |\$$$$$$$\ \$$$$$$$ |$$ |      $$ |$$ |  $$ |\$$$$$$$ |$$$$$$$  |
+\_______/  \_______| \_______|\__|      \__|\__|  \__| \____$$ |\_______/ 
+                                                      $$\   $$ |          
+                                                      \$$$$$$  |          
+                                                       \______/
+=#
 
 module Bearings
 
-struct Bearing
+mutable struct Bearing
     "Radial load"
     wr::Real
     "Axial load"
     wa::Real
     "RPM"
-    N::Int
+    N::Real
     "Life in hours"
-    lh::Int
+    lh::Real
     "Internal diameter"
     d::Union{Real,Nothing}
     "Static load rating"
@@ -357,13 +405,8 @@ WeR(wr::Real,wa::Real,x0=0.6,y0=0.5) = x0*wr+y0*wa
 "Static load rating for radial ball bearing"
 C0(n::Real,Z::Real,D::Real,alpha::Real=0,f_0::Real=12.3,) = f_0*n*Z*D^2*cos(alpha)
 
-#=
-"Basic dynamic load for balls smaller than 25.4mm"
-C(f_c::Real,n::Real,Z::Real,D::Real,alpha::Real=0) = f_c*(n*cos(alpha))^0.7 * Z*(1/3) * D^1.8 
-=#
-
 "Dynamic equivalent radial load"
-W(wr::Real,wa::Real,v=1,ks=2,x=1,y=0) = (x*v*wr + y*wa)*ks #ks for medium shock loads
+W(wr::Real,wa::Real,v=1,ks=2,x=1,y=0) = (x*v*wr + y*wa)*ks #for medium shock loads
 
 "Dynamic load rating"
 C(W::Real,L::Real,k::Real=3) = W*(L/1e6)^(1/k)
@@ -372,7 +415,7 @@ C(W::Real,L::Real,k::Real=3) = W*(L/1e6)^(1/k)
 a(R::Real) = 6.85*(log(1/R))^(1/1.17)
 
 "Life in revs from life in working hours"
-L(lh::Int,N::Real) = 60*N*lh
+L(lh::Real,N::Real) = 60*N*lh
 
 "Calculates the parameters of the bearing"
 function calculate(b::Bearing)
@@ -382,109 +425,3 @@ function calculate(b::Bearing)
 end
 
 end
-
-
-
-
-
-
-
-
-#=
-macro solfngen(method,sol_for,sol_with)
-    return :(
-        function val_solve(g,x)
-            g.$sol_for = x
-            return $method(g) - g.$sol_with
-        end
-    )
-end
-
-#=
-macro vec_gen(g,sol_for)
-    val = :(g.$sol_for)
-    return collect((val-val/10):(val/100):val+val/10)
-end
-
-function vec_solve(g::AbstractGear,func,vec::AbstractArray)
-    y = [func(g,x) for x in vec]
-    min_index = findmin(abs.(y))[2]
-    return vec[min_index]
-end
-
-=#
-
-
-# This macro finds a solution for a function from within a range
-macro solver(g,func,sol_for) # sol_for is a field that sould contain a range tuple
-    #gg = :(esc(g))
-    ran_tuple = :($g.$sol_for)
-    x = :(collect($ran_tuple[1]:(($ran_tuple[2]-$ran_tuple[1])/100):$ran_tuple[2]))
-    y = :([$func($g,t) for t in $x])
-    min_index = :(findmin(abs.($y))[2])
-    return :($x[$min_index])
-end
-=#
-#=
-abstract type Gear end
-
-mutable struct Gear14c <: Gear # 14.5 deg composite
-    P # power transmitted (Watt)
-    dia # diameter (m)
-    rpm # Revolutions per minute
-    G # gear ratio
-    cs # service factor
-    T # teeth
-    mod # module of gear (mm)
-    pinion # whether gear is a pinion or not
-    sig # Material strength (Allowable static stress) (N/mm2)
-    sige # Flexural endurance limit (N/mm2)
-    siges # Surface endurance limit (N/mm2)
-    E # Young's modulus (N/mm2)
-    met::String # method of manufacture: "mach"(machined) or "cast"
-end
-
-mutable struct Gear14f <: Gear # 14.5 deg full depth
-    P # power transmitted
-    dia # diameter
-    rpm # Revolutions per minute
-    G # gear ratio
-    cs # service factor
-    T # teeth
-    mod # module of gear
-    pinion # whether gear is a pinion or not
-    sig # Material strength (stress)
-    sige # Flexural endurance limit (N/mm@)
-    siges # Surface endurance limit (N/mm2)
-    E # Young's modulus (N/mm2)
-    met::String # method of manufacture: "mach"(machined) or "cast"
-end
-=#
-#=
-function roll(R,h0,d,w,k,n,N)
-    L = sqrt(R*d) # contact length
-    e = log(h0/(h0-d)) # true strain
-    sigAvg = (k*e^n)/(1+n) # average flow stress
-    rf = L*w*sigAvg # Rolling force
-    power = 2*pi*rf*L*N / 60 # power
-    torque = L*rf/2 # torque
-    return torque, power
-end
-=#
-#=
-mutable struct Gear20s <: Gear # 20 deg stub
-    P # power transmitted
-    dia # diameter
-    rpm # Revolutions per minute
-    G # gear ratio
-    cs # service factor
-    T # teeth
-    mod # module of gear
-    pinion # whether gear is a pinion or not
-    sig # Material strength (stress)
-    sige # Flexural endurance limit (N/mm@)
-    siges # Surface endurance limit (N/mm2)
-    E # Young's modulus (N/mm2)
-    met::String # method of manufacture: "mach"(machined) or "cast"
-end
-=#
