@@ -51,6 +51,10 @@ end
 
 end
 
+
+
+
+
 #=
  $$$$$$\
 $$  __$$\
@@ -273,6 +277,7 @@ using Roots
 using QuadGK
 using Plots
 export Shaft,Force,vecsolve,shear,moment
+export T
 export calculate,resultant
 
 struct Force
@@ -299,6 +304,7 @@ end
 Tmax(tau::Real,d_o::Real,k::Real) = pi/16*tau*d_o^3*(1-k^4) 
 "Torque on a shaft"
 T(P::Real,N::Real) = P*60/(2*pi*N)
+T(s::Shaft) = T(s.Power,s.N)
 "Max bending moment for a shaft"
 Mmax(sig::Real,d_o::Real,k::Real) = pi/32*sig*d_o^3*(1-k^4)
 
@@ -348,14 +354,19 @@ function calculate(s::Shaft)
     mx = moment(vx,s.L)
     my = moment(vy,s.L)
     x = collect(0:(s.L/1000):s.L)
-    plvx = plot(x,vx.(x,s.L))
-    plvy = plot(x,vy.(x,s.L))
-    plmx = plot(x,mx.(x))
-    plmy = plot(x,my.(x))
-    savefig(plvx,"figures/shear-x.png")
-    savefig(plvy,"figures/shear-y.png")
-    savefig(plmx,"figures/moment-x.png")
-    savefig(plmy,"figures/moment-y.png")
+    plvx = plot(x,vx.(x,s.L),title = "Shear Force, X",
+        xlabel="Length",ylabel="Force")
+    plvy = plot(x,vy.(x,s.L),title = "Shear Force, Y",
+        xlabel="Length",ylabel="Force")
+    plmx = plot(x,mx.(x),title = "Bending Moment, X",
+        xlabel="Length",ylabel="Moment")
+    plmy = plot(x,my.(x),title = "Bending Moment, Y",
+        xlabel="Length",ylabel="Moment")
+    plall = plot(plvx,plvy,plmx,plmy,layout=4,legend=false)
+    #savefig(plvx,"figures/shear-x.png")
+    #savefig(plvy,"figures/shear-y.png")
+    #savefig(plmx,"figures/moment-x.png")
+    #savefig(plmy,"figures/moment-y.png")
     
     m = findmax( ( findmax(abs.(mx.(x)))[1] , findmax(abs.(my.(x)))[1] ) )[1]
     te = Te(m,t)
@@ -364,6 +375,8 @@ function calculate(s::Shaft)
     t_dia = fzero(x->Tmax(s.tau,x,s.k)-te,0)
     m_dia = fzero(x->Mmax(s.sig,x,s.k)-me,0)
     s.dia = (t_dia,m_dia)
+    
+    return plvx,plvy,plmx,plmy,plall
 end
 end
 #=
@@ -424,4 +437,66 @@ function calculate(b::Bearing)
     b.c = C(w,l10)
 end
 
+end
+
+#=
+$$\   $$\                              
+$$ | $$  |                             
+$$ |$$  / $$$$$$\  $$\   $$\  $$$$$$$\ 
+$$$$$  / $$  __$$\ $$ |  $$ |$$  _____|
+$$  $$<  $$$$$$$$ |$$ |  $$ |\$$$$$$\  
+$$ |\$$\ $$   ____|$$ |  $$ | \____$$\ 
+$$ | \$$\\$$$$$$$\ \$$$$$$$ |$$$$$$$  |
+\__|  \__|\_______| \____$$ |\_______/ 
+                   $$\   $$ |          
+                   \$$$$$$  |          
+                    \______/
+=#
+module Keys
+using Roots
+mutable struct Key
+    "Key length"
+    l::Real
+    "Diameter of shaft"
+    d::Real
+    "Width of key"
+    w::Real
+    "Thickness of key"
+    t::Real
+    "Allowable direct stress"
+    sig::Real
+    "Allowable shear stress"
+    tau::Real
+    "Transmitted torque"
+    T::Real
+    "Shaft strength factor"
+    e::Real
+end
+
+shaft_dia = [6,8,10,12,17,22,30,38,44,50,58,65,75]*1e-3
+key_width = [2,3,4,5,6,8,10,12,14,16,18,20,22]*1e-3
+key_thick = [2,3,4,5,6,7,8,8,9,10,11,12,14]*1e-3
+
+function standardVals(d) 
+    index = findfirst(x->x>d,shaft_dia)
+    return key_width[index],key_thick[index]
+end
+"Shear faliure"
+Ts(l,w,tau,d) = l*w*tau*d/2
+
+"Crushing faliure"
+Tc(l,t,sig,d) = l*(t/2)*sig*(d/2)
+
+"Effect of Keyways on shaft"
+e(w,d,t) = 1 - 0.2(w/d) - 1.1*(t/2)/d
+
+function calculate(k::Key)
+    k.w, k.t = standardVals(k.d)
+    
+    ls = fzero(x->Ts(x,k.w,k.tau,k.d)-k.T,0) 
+    lc = fzero(x->Tc(x,k.t,k.sig,k.d)-k.T,0)
+    k.l = round(max(ls,lc),digits=4)
+    k.e = e(k.w,k.d,k.t)
+
+end
 end
